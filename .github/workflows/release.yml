@@ -18,13 +18,22 @@ permissions:
 jobs:
   build:
     name: Сборка приложения
-    runs-on: macos-14
+    # Раннер с macOS Tahoe — на нём установлен последний Xcode 26/27.
+    runs-on: macos-26
     steps:
       - name: Получение исходников
         uses: actions/checkout@v4
 
-      - name: Выбор Xcode
-        run: sudo xcode-select -switch /Applications/Xcode_16.app 2>/dev/null || sudo xcode-select -switch /Applications/Xcode.app
+      - name: Выбор последнего Xcode
+        run: |
+          # Берём максимальную из установленных версий Xcode (26 или 27).
+          NEWEST=$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | tail -1)
+          if [ -n "$NEWEST" ]; then
+            sudo xcode-select -switch "$NEWEST"
+          fi
+          echo "Используется:"
+          xcodebuild -version
+          swift --version
 
       - name: Определение версии
         id: ver
