@@ -69,34 +69,55 @@ enum CheckStatus: String, Codable {
 
 // MARK: - Категории анализа
 
-/// Категории анализа — соответствуют разделам SEOptimer.
+/// Категории анализа.
+/// SEO/Производительность/Удобство/Соцсети/Безопасность — классический аудит (как SEOptimer),
+/// AEO и GEO — оптимизация под ответные и генеративные (AI) поисковые системы.
 enum SEOCategory: String, CaseIterable, Codable, Identifiable {
     case seo         = "SEO"
+    case aeo         = "AEO"
+    case geo         = "GEO"
     case performance = "Производительность"
     case usability   = "Удобство"
-    case social      = "Соцсети"
     case security    = "Безопасность"
+    case social      = "Соцсети"
 
     var id: String { rawValue }
 
-    /// Вес категории в итоговом балле (в сумме 100).
+    /// Подробное название для отчётов.
+    var fullName: String {
+        switch self {
+        case .seo:         return "SEO — классическая поисковая оптимизация"
+        case .aeo:         return "AEO — оптимизация под ответные системы (сниппеты, голосовой поиск)"
+        case .geo:         return "GEO — оптимизация под генеративные ИИ-поисковики"
+        case .performance: return "Производительность"
+        case .usability:   return "Удобство использования"
+        case .security:    return "Безопасность"
+        case .social:      return "Социальные сети"
+        }
+    }
+
+    /// Вес категории в итоговом балле (в сумме 1.0).
     var weight: Double {
         switch self {
-        case .seo:         return 0.40
-        case .performance: return 0.20
-        case .usability:   return 0.15
-        case .social:      return 0.10
-        case .security:    return 0.15
+        case .seo:         return 0.30
+        case .aeo:         return 0.14
+        case .geo:         return 0.14
+        case .performance: return 0.15
+        case .usability:   return 0.10
+        case .security:    return 0.10
+        case .social:      return 0.07
         }
     }
 
     var iconName: String {
         switch self {
         case .seo:         return "magnifyingglass"
+        case .aeo:         return "questionmark.bubble"
+        case .geo:         return "sparkles"
         case .performance: return "speedometer"
         case .usability:   return "hand.tap"
-        case .social:      return "person.2"
         case .security:    return "lock.shield"
+        case .social:      return "person.2"
         }
     }
 }

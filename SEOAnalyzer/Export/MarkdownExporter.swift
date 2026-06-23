@@ -42,7 +42,7 @@ enum MarkdownExporter {
 
         // Детализация по категориям
         for c in report.categories {
-            md += "## \(c.category.rawValue) — \(c.grade.rawValue) (\(c.score)/100)\n\n"
+            md += "## \(c.category.fullName) — \(c.grade.rawValue) (\(c.score)/100)\n\n"
             md += "Пройдено: \(c.passedCount) · Замечаний: \(c.warningCount) · Ошибок: \(c.failedCount)\n\n"
             for check in c.checks {
                 md += "### \(check.status.symbol) \(check.title) — \(check.status.label)\n\n"

@@ -1,0 +1,36 @@
+name: Проверка сборки
+
+# Компилирует приложение при каждом пуше в main — без публикации релиза.
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  compile:
+    name: Компиляция (Xcode 26/27)
+    runs-on: macos-26
+    steps:
+      - name: Получение исходников
+        uses: actions/checkout@v4
+
+      - name: Выбор последнего Xcode
+        run: |
+          NEWEST=$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | tail -1)
+          if [ -n "$NEWEST" ]; then sudo xcode-select -switch "$NEWEST"; fi
+          xcodebuild -version
+
+      - name: Сборка
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project SEOAnalyzer.xcodeproj \
+            -scheme SEOAnalyzer \
+            -configuration Release \
+            -derivedDataPath build \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            ENABLE_HARDENED_RUNTIME=NO \
+            clean build
