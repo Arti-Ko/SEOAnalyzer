@@ -56,7 +56,7 @@ final class SiteCrawler: @unchecked Sendable {
     /// слот сразу занимает следующий URL из очереди. Старая реализация ждала,
     /// пока вся пачка из `concurrency` догрузится, прежде чем начать следующую —
     /// одна медленная страница в пачке простаивала остальных воркеров впустую.
-    func crawl(start: URL, seeds: [URL]) async -> [PageScan] {
+    func crawl(start: URL, seeds: [URL], onProgress: @escaping (_ done: Int, _ total: Int) -> Void = { _, _ in }) async -> [PageScan] {
         guard let baseHost = Self.baseHost(start) else { return [] }
 
         var visited = Set<String>()
@@ -106,6 +106,7 @@ final class SiteCrawler: @unchecked Sendable {
                 inFlight -= 1
                 if let scan {
                     results.append(scan)
+                    onProgress(results.count, maxPages)
                     // Засеваем новыми внутренними ссылками (с запасом для очереди).
                     if enqueued.count < maxPages * 5 {
                         for link in scan.internalLinks { enqueue(link) }

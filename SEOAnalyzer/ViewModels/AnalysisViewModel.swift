@@ -10,6 +10,9 @@ final class AnalysisViewModel: ObservableObject {
     @Published var isAnalyzing: Bool = false
     @Published var report: AnalysisReport?
     @Published var errorMessage: String?
+    @Published var pagesScanned: Int = 0
+    @Published var pagesTotal: Int = 0
+    @Published var scanEstimatedSecondsRemaining: Double?
 
     private let analyzer = Analyzer()
     private var currentTask: Task<Void, Never>?
@@ -23,11 +26,29 @@ final class AnalysisViewModel: ObservableObject {
         errorMessage = nil
         isAnalyzing = true
         report = nil
+        pagesScanned = 0
+        pagesTotal = max(1, UserDefaults.standard.object(forKey: "crawlLimit") as? Int ?? 50)
+        scanEstimatedSecondsRemaining = nil
 
-        let limit = max(1, UserDefaults.standard.object(forKey: "crawlLimit") as? Int ?? 50)
+        let limit = pagesTotal
+        let startDate = Date()
         currentTask = Task {
             do {
-                let result = try await analyzer.analyze(urlString: input, crawlLimit: limit)
+                let result = try await analyzer.analyze(urlString: input, crawlLimit: limit) { [weak self] done, total in
+                    Task { @MainActor in
+                        guard let self else { return }
+                        self.pagesScanned = done
+                        self.pagesTotal = total
+                        // Оценка по средней скорости сканирования с начала обхода.
+                        let elapsed = Date().timeIntervalSince(startDate)
+                        if done >= 2, total > done {
+                            let perPage = elapsed / Double(done)
+                            self.scanEstimatedSecondsRemaining = perPage * Double(total - done)
+                        } else {
+                            self.scanEstimatedSecondsRemaining = nil
+                        }
+                    }
+                }
                 self.report = result
             } catch {
                 // Отмену пользователем не показываем как ошибку.

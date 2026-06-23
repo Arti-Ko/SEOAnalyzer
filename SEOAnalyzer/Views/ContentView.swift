@@ -101,10 +101,25 @@ struct ContentView: View {
                 .font(.system(size: 40))
                 .foregroundStyle(.tint)
                 .symbolEffect(.variableColor.iterative, options: .repeating)
-            ProgressView()
-                .controlSize(.large)
+
+            if vm.pagesScanned > 0 {
+                ProgressView(value: Double(vm.pagesScanned), total: Double(max(vm.pagesTotal, vm.pagesScanned)))
+                    .progressViewStyle(.linear)
+                    .frame(width: 240)
+            } else {
+                ProgressView().controlSize(.large)
+            }
+
             Text("Глубоко сканируем сайт…")
                 .font(.system(size: 15, weight: .semibold))
+
+            if vm.pagesScanned > 0 {
+                Text(scanStatusDetail)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.tint)
+                    .contentTransition(.numericText())
+            }
+
             Text("Обходим страницы по внутренним ссылкам и sitemap,\nпроверяем SEO, AEO, GEO, скорость, безопасность и доступность.")
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
@@ -112,6 +127,18 @@ struct ContentView: View {
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .animation(.smooth(duration: 0.25), value: vm.pagesScanned)
+    }
+
+    /// Например: «32% · 16 из 50 страниц · осталось ~12 с».
+    private var scanStatusDetail: String {
+        let percent = vm.pagesTotal > 0
+            ? Int((Double(vm.pagesScanned) / Double(vm.pagesTotal) * 100).rounded()) : 0
+        var text = "\(percent)% · \(vm.pagesScanned) из \(vm.pagesTotal) страниц"
+        if let eta = vm.scanEstimatedSecondsRemaining, eta.isFinite, eta > 0 {
+            text += " · осталось ~\(formatETA(eta))"
+        }
+        return text
     }
 
     private var welcomeView: some View {

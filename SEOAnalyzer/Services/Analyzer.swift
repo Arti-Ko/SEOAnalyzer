@@ -68,7 +68,8 @@ final class Analyzer {
 
     // MARK: - Публичный API
 
-    func analyze(urlString: String, crawlLimit: Int = 50) async throws -> AnalysisReport {
+    func analyze(urlString: String, crawlLimit: Int = 50,
+                 onProgress: @escaping (_ done: Int, _ total: Int) -> Void = { _, _ in }) async throws -> AnalysisReport {
         guard let url = Self.normalizeURL(urlString) else { throw AnalyzerError.invalidURL }
 
         let page = try await fetch(url: url)
@@ -91,7 +92,7 @@ final class Analyzer {
         // Глубокий обход сайта: засеваем ссылками из sitemap.
         let seeds = sitemapText.map { SiteCrawler.parseSitemap($0) } ?? []
         let crawler = SiteCrawler(session: session, maxPages: crawlLimit)
-        let scans = await crawler.crawl(start: page.finalURL, seeds: seeds)
+        let scans = await crawler.crawl(start: page.finalURL, seeds: seeds, onProgress: onProgress)
 
         let seo         = analyzeSEO(doc: doc, h1: h1, words: words, hasRobots: hasRobots, hasSitemap: hasSitemap)
         let aeo         = analyzeAEO(doc: doc, scans: scans)
