@@ -298,15 +298,45 @@ extension HTMLDocument {
             || !matches("<time[^>]*datetime=").isEmpty
     }
 
-    /// Привязка к авторитетным сущностям (sameAs, Wikipedia, Wikidata).
+    /// Привязка к авторитетным сущностям знаний (Wikipedia / Wikidata / DBpedia).
+    /// ВАЖНО: обычный sameAs на соцсети (Telegram/VK и т.п.) НЕ считается авторитетной
+    /// сущностью — иначе получаем ложноположительный результат.
     var hasEntityAuthority: Bool {
-        jsonLDText.contains("sameas")
-            || lowercased.contains("wikipedia.org")
+        lowercased.contains("wikipedia.org")
             || lowercased.contains("wikidata.org")
+            || lowercased.contains("dbpedia.org")
+            || lowercased.contains("//g.co/kg/")        // Google Knowledge Graph
     }
 
     /// Разметка speakable (голосовые ассистенты).
     var hasSpeakable: Bool { jsonLDText.contains("speakable") }
+
+    /// Похоже ли на клиентский рендеринг (SPA) — контент/разметку добавляет JS уже в браузере.
+    var looksLikeSPA: Bool {
+        let markers = ["id=\"root\"", "id='root'", "id=\"__next\"", "__next_data__",
+                       "id=\"__nuxt\"", "window.__nuxt__", "data-reactroot", "ng-version",
+                       "id=\"app\""]
+        return markers.contains { lowercased.contains($0) }
+    }
+
+    /// Сводка сигналов страницы для агрегации по всему сайту.
+    func pageSignals() -> PageSignals {
+        PageSignals(
+            hasStructuredData: hasStructuredData,
+            hasFAQ: hasSchemaType("FAQPage") || hasSchemaType("QAPage"),
+            hasBreadcrumb: hasSchemaType("BreadcrumbList"),
+            hasArticleHowTo: hasSchemaType("Article") || hasSchemaType("HowTo")
+                || hasSchemaType("NewsArticle"),
+            hasSpeakable: hasSpeakable,
+            questionHeadings: questionHeadings().count,
+            lists: listCount,
+            tables: tableCount,
+            hasAuthor: hasAuthorSignal,
+            hasDate: hasDateSignal,
+            hasWikiAuthority: hasEntityAuthority,
+            isSPA: looksLikeSPA
+        )
+    }
 }
 
 // MARK: - Разбор robots.txt

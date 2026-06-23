@@ -1,5 +1,26 @@
 import Foundation
 
+/// Сигналы страницы для агрегации AEO/GEO по всему сайту (а не только по главной).
+struct PageSignals {
+    let hasStructuredData: Bool
+    let hasFAQ: Bool
+    let hasBreadcrumb: Bool
+    let hasArticleHowTo: Bool
+    let hasSpeakable: Bool
+    let questionHeadings: Int
+    let lists: Int
+    let tables: Int
+    let hasAuthor: Bool
+    let hasDate: Bool
+    let hasWikiAuthority: Bool
+    let isSPA: Bool
+
+    static let empty = PageSignals(hasStructuredData: false, hasFAQ: false, hasBreadcrumb: false,
+                                   hasArticleHowTo: false, hasSpeakable: false, questionHeadings: 0,
+                                   lists: 0, tables: 0, hasAuthor: false, hasDate: false,
+                                   hasWikiAuthority: false, isSPA: false)
+}
+
 /// Результат сканирования одной страницы сайта.
 struct PageScan {
     let url: String
@@ -11,9 +32,9 @@ struct PageScan {
     let wordCount: Int
     let noindex: Bool
     let isHTTPS: Bool
-    let hasStructuredData: Bool
     let internalLinks: [URL]
     let isHTML: Bool
+    let signals: PageSignals
 }
 
 /// Глубокий обход сайта: ходит по внутренним ссылкам и страницам из sitemap,
@@ -103,7 +124,7 @@ final class SiteCrawler: @unchecked Sendable {
                 return PageScan(url: url.absoluteString, status: http.statusCode, responseMs: ms,
                                 title: nil, hasDescription: false, h1Count: 0, wordCount: 0,
                                 noindex: false, isHTTPS: url.scheme == "https",
-                                hasStructuredData: false, internalLinks: [], isHTML: isHTML)
+                                internalLinks: [], isHTML: isHTML, signals: .empty)
             }
 
             let html = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1) ?? ""
@@ -129,16 +150,16 @@ final class SiteCrawler: @unchecked Sendable {
                 wordCount: doc.wordCount,
                 noindex: (doc.metaRobots ?? "").lowercased().contains("noindex"),
                 isHTTPS: base.scheme == "https",
-                hasStructuredData: doc.hasStructuredData,
                 internalLinks: links,
-                isHTML: true
+                isHTML: true,
+                signals: doc.pageSignals()
             )
         } catch {
             // Сетевую ошибку трактуем как недоступную страницу (битую ссылку).
             return PageScan(url: url.absoluteString, status: -1, responseMs: 0,
                             title: nil, hasDescription: false, h1Count: 0, wordCount: 0,
                             noindex: false, isHTTPS: url.scheme == "https",
-                            hasStructuredData: false, internalLinks: [], isHTML: false)
+                            internalLinks: [], isHTML: false, signals: .empty)
         }
     }
 

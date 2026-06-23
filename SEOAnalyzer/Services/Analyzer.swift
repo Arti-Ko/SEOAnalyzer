@@ -92,8 +92,8 @@ final class Analyzer {
         let scans = await crawler.crawl(start: page.finalURL, seeds: seeds)
 
         let seo         = analyzeSEO(doc: doc, hasRobots: hasRobots, hasSitemap: hasSitemap)
-        let aeo         = analyzeAEO(doc: doc)
-        let geo         = analyzeGEO(doc: doc, page: page, robots: robots, hasRobots: hasRobots, hasLLMs: hasLLMs)
+        let aeo         = analyzeAEO(doc: doc, scans: scans)
+        let geo         = analyzeGEO(doc: doc, page: page, scans: scans, robots: robots, hasRobots: hasRobots, hasLLMs: hasLLMs)
         let crawl       = analyzeCrawl(scans: scans, hasSitemap: hasSitemap)
         let performance = analyzePerformance(doc: doc, page: page)
         let usability   = analyzeUsability(doc: doc, page: page)
@@ -308,108 +308,114 @@ final class Analyzer {
 
     // MARK: - AEO (Answer Engine Optimization)
 
-    private func analyzeAEO(doc: HTMLDocument) -> CategoryResult {
+    private func analyzeAEO(doc: HTMLDocument, scans: [PageScan]) -> CategoryResult {
         var checks: [CheckItem] = []
         var s = Scorer()
         func record(_ w: Double, _ item: CheckItem, credit: Double = 0.33) {
             checks.append(item); s.add(w, item.status, credit: credit)
         }
 
+        // Сигналы по ВСЕМУ сайту (а не только по главной).
+        let html = scans.filter { $0.isHTML && $0.status >= 200 && $0.status < 400 }
+        let sig = html.isEmpty ? [doc.pageSignals()] : html.map { $0.signals }
+        let m = sig.count
+        func cnt(_ kp: (PageSignals) -> Bool) -> Int { sig.filter(kp).count }
+        func where_(_ c: Int) -> String { "Найдено на \(c) из \(m) обойдённых страниц." }
+
         // Структурированные данные (основа для ответных систем)
-        if doc.hasStructuredData {
-            record(22, CheckItem("Структурированные данные (Schema.org)", status: .passed,
-                detail: "Найдена разметка: \(doc.hasJSONLD ? "JSON-LD" : "микроразметка")."))
-        } else {
-            record(22, CheckItem("Структурированные данные (Schema.org)", status: .failed,
-                detail: "Разметки Schema.org нет.",
-                recommendation: "Добавьте JSON-LD (Article, FAQPage, Organization) — без неё страница почти не попадает в ответы поисковиков."))
-        }
+        let sd = cnt { $0.hasStructuredData }
+        record(22, sd > 0
+            ? CheckItem("Структурированные данные (Schema.org)", status: .passed, detail: where_(sd))
+            : CheckItem("Структурированные данные (Schema.org)", status: .failed,
+                detail: "Разметки Schema.org нет ни на одной из \(m) страниц.",
+                recommendation: "Добавьте JSON-LD (Article, FAQPage, Organization)."))
 
         // FAQ / QA схема
-        if doc.hasSchemaType("FAQPage") || doc.hasSchemaType("QAPage") {
-            record(12, CheckItem("FAQ-разметка", status: .passed, detail: "Найдена схема FAQPage/QAPage."))
-        } else {
-            record(12, CheckItem("FAQ-разметка", status: .warning, detail: "Схема FAQPage не найдена.",
-                recommendation: "Оформите блок вопросов-ответов разметкой FAQPage для расширенных сниппетов."), credit: 0.3)
-        }
+        let faq = cnt { $0.hasFAQ }
+        record(12, faq > 0
+            ? CheckItem("FAQ-разметка", status: .passed, detail: where_(faq))
+            : CheckItem("FAQ-разметка", status: .warning, detail: "Схема FAQPage/QAPage не найдена на сайте.",
+                recommendation: "Оформите вопросы-ответы разметкой FAQPage для расширенных сниппетов."), credit: 0.3)
 
-        // Заголовки-вопросы
-        let q = doc.questionHeadings().count
-        if q >= 1 {
-            record(10, CheckItem("Заголовки-вопросы", status: .passed, detail: "Заголовков в форме вопроса: \(q)."))
-        } else {
-            record(10, CheckItem("Заголовки-вопросы", status: .warning, detail: "Нет заголовков в форме вопроса.",
-                recommendation: "Добавьте подзаголовки-вопросы («Как…?», «Что такое…?») — под них формируются ответы."), credit: 0.3)
-        }
+        // Заголовки-вопросы (суммарно по сайту)
+        let q = sig.map { $0.questionHeadings }.reduce(0, +)
+        record(10, q > 0
+            ? CheckItem("Заголовки-вопросы", status: .passed, detail: "Заголовков в форме вопроса по сайту: \(q).")
+            : CheckItem("Заголовки-вопросы", status: .warning, detail: "Заголовков-вопросов на сайте не найдено.",
+                recommendation: "Добавьте подзаголовки-вопросы («Как…?», «Что такое…?»)."), credit: 0.3)
 
-        // Списки (дружелюбны к featured snippet)
-        record(8, doc.listCount > 0
-            ? CheckItem("Списки", status: .passed, detail: "Маркированных/нумерованных списков: \(doc.listCount).")
-            : CheckItem("Списки", status: .warning, detail: "Списков (ul/ol) нет.",
+        // Списки
+        let lists = cnt { $0.lists > 0 }
+        record(8, lists > 0
+            ? CheckItem("Списки", status: .passed, detail: "Списки есть на \(lists) из \(m) страниц.")
+            : CheckItem("Списки", status: .warning, detail: "Списков (ul/ol) на сайте не найдено.",
                 recommendation: "Структурируйте ответы списками — их часто берут в сниппеты."), credit: 0.4)
 
         // Таблицы
-        record(6, doc.tableCount > 0
-            ? CheckItem("Таблицы данных", status: .passed, detail: "Таблиц: \(doc.tableCount).")
-            : CheckItem("Таблицы данных", status: .warning, detail: "Таблиц нет.",
-                recommendation: "Сравнительные данные оформляйте таблицами — удобны для ответов."), credit: 0.5)
+        let tables = cnt { $0.tables > 0 }
+        record(6, tables > 0
+            ? CheckItem("Таблицы данных", status: .passed, detail: "Таблицы есть на \(tables) из \(m) страниц.")
+            : CheckItem("Таблицы данных", status: .warning, detail: "Таблиц на сайте не найдено.",
+                recommendation: "Сравнительные данные оформляйте таблицами."), credit: 0.5)
 
         // Article / HowTo
-        if doc.hasSchemaType("Article") || doc.hasSchemaType("HowTo") || doc.hasSchemaType("NewsArticle") {
-            record(8, CheckItem("Разметка контента (Article/HowTo)", status: .passed, detail: "Найдена схема Article/HowTo."))
-        } else {
-            record(8, CheckItem("Разметка контента (Article/HowTo)", status: .warning, detail: "Схемы Article/HowTo нет.",
+        let art = cnt { $0.hasArticleHowTo }
+        record(8, art > 0
+            ? CheckItem("Разметка контента (Article/HowTo)", status: .passed, detail: where_(art))
+            : CheckItem("Разметка контента (Article/HowTo)", status: .warning, detail: "Схем Article/HowTo на сайте нет.",
                 recommendation: "Размечайте статьи и инструкции схемами Article/HowTo."), credit: 0.3)
-        }
 
         // Хлебные крошки
-        if doc.hasSchemaType("BreadcrumbList") {
-            record(8, CheckItem("Хлебные крошки (Breadcrumb)", status: .passed, detail: "Найдена схема BreadcrumbList."))
-        } else {
-            record(8, CheckItem("Хлебные крошки (Breadcrumb)", status: .warning, detail: "Разметки BreadcrumbList нет.",
+        let bc = cnt { $0.hasBreadcrumb }
+        record(8, bc > 0
+            ? CheckItem("Хлебные крошки (Breadcrumb)", status: .passed, detail: where_(bc))
+            : CheckItem("Хлебные крошки (Breadcrumb)", status: .warning, detail: "Разметки BreadcrumbList на сайте нет.",
                 recommendation: "Добавьте BreadcrumbList — помогает в навигационных сниппетах."), credit: 0.3)
-        }
 
-        // Speakable (голосовой поиск)
-        record(6, doc.hasSpeakable
-            ? CheckItem("Голосовой поиск (speakable)", status: .passed, detail: "Найдена разметка speakable.")
-            : CheckItem("Голосовой поиск (speakable)", status: .warning, detail: "Разметки speakable нет.",
+        // Speakable
+        let sp = cnt { $0.hasSpeakable }
+        record(6, sp > 0
+            ? CheckItem("Голосовой поиск (speakable)", status: .passed, detail: where_(sp))
+            : CheckItem("Голосовой поиск (speakable)", status: .warning, detail: "Разметки speakable на сайте нет.",
                 recommendation: "Для голосовых ассистентов добавьте speakable к ключевым блокам."), credit: 0.25)
 
-        // Краткое описание-ответ
-        if let d = doc.metaDescription, !d.isEmpty {
-            record(8, CheckItem("Краткий ответ (description)", status: .passed, detail: "Description пригоден как краткий ответ."))
-        } else {
-            record(8, CheckItem("Краткий ответ (description)", status: .failed, detail: "Нет краткого описания страницы.",
+        // Краткое описание-ответ (по главной)
+        record(8, (doc.metaDescription?.isEmpty == false)
+            ? CheckItem("Краткий ответ (description)", status: .passed, detail: "Description пригоден как краткий ответ.")
+            : CheckItem("Краткий ответ (description)", status: .failed, detail: "Нет краткого описания главной.",
                 recommendation: "Добавьте лаконичное description — его используют как готовый ответ."))
-        }
 
-        // Сниппеты не запрещены
+        // Сниппеты не запрещены (по главной)
         let robots = (doc.metaRobots ?? "").lowercased()
-        if robots.contains("nosnippet") || robots.contains("max-snippet:0") {
-            record(6, CheckItem("Разрешение сниппетов", status: .failed, detail: "Сниппеты запрещены (nosnippet/max-snippet:0).",
-                recommendation: "Уберите nosnippet — иначе ответные системы не покажут ваш текст."))
-        } else {
-            record(6, CheckItem("Разрешение сниппетов", status: .passed, detail: "Сниппеты разрешены."))
-        }
+        record(6, (robots.contains("nosnippet") || robots.contains("max-snippet:0"))
+            ? CheckItem("Разрешение сниппетов", status: .failed, detail: "Сниппеты запрещены (nosnippet).",
+                recommendation: "Уберите nosnippet — иначе ответные системы не покажут текст.")
+            : CheckItem("Разрешение сниппетов", status: .passed, detail: "Сниппеты разрешены."))
 
         return CategoryResult(category: .aeo, score: s.score, checks: checks)
     }
 
     // MARK: - GEO (Generative Engine Optimization)
 
-    private func analyzeGEO(doc: HTMLDocument, page: FetchedPage, robots: RobotsTxt,
-                            hasRobots: Bool, hasLLMs: Bool) -> CategoryResult {
+    private func analyzeGEO(doc: HTMLDocument, page: FetchedPage, scans: [PageScan],
+                            robots: RobotsTxt, hasRobots: Bool, hasLLMs: Bool) -> CategoryResult {
         var checks: [CheckItem] = []
         var s = Scorer()
         func record(_ w: Double, _ item: CheckItem, credit: Double = 0.33) {
             checks.append(item); s.add(w, item.status, credit: credit)
         }
 
-        // Структурированные данные (машиночитаемость для ИИ)
-        record(16, doc.hasStructuredData
-            ? CheckItem("Машиночитаемая разметка", status: .passed, detail: "Schema.org присутствует.")
-            : CheckItem("Машиночитаемая разметка", status: .failed, detail: "Schema.org отсутствует.",
+        // Сигналы по всему сайту.
+        let html = scans.filter { $0.isHTML && $0.status >= 200 && $0.status < 400 }
+        let sig = html.isEmpty ? [doc.pageSignals()] : html.map { $0.signals }
+        let m = sig.count
+        func cnt(_ kp: (PageSignals) -> Bool) -> Int { sig.filter(kp).count }
+
+        // Структурированные данные (машиночитаемость для ИИ) — по сайту
+        let sd = cnt { $0.hasStructuredData }
+        record(16, sd > 0
+            ? CheckItem("Машиночитаемая разметка", status: .passed, detail: "Schema.org на \(sd) из \(m) страниц.")
+            : CheckItem("Машиночитаемая разметка", status: .failed, detail: "Schema.org нет ни на одной из \(m) страниц.",
                 recommendation: "ИИ-поисковики опираются на структурированные данные — добавьте JSON-LD."))
 
         // Доступ ИИ-роботов (GPTBot, ClaudeBot, PerplexityBot, Google-Extended, CCBot…)
@@ -437,17 +443,21 @@ final class Analyzer {
             : CheckItem("Файл llms.txt", status: .warning, detail: "llms.txt отсутствует.",
                 recommendation: "Добавьте /llms.txt — новый стандарт-подсказка для ИИ о структуре сайта."), credit: 0.25)
 
-        // Авторство / экспертность (E-E-A-T)
-        record(12, doc.hasAuthorSignal
-            ? CheckItem("Авторство (E-E-A-T)", status: .passed, detail: "Есть сигналы авторства.")
-            : CheckItem("Авторство (E-E-A-T)", status: .failed, detail: "Нет указания автора/эксперта.",
+        // Авторство / экспертность (E-E-A-T) — по сайту
+        let au = cnt { $0.hasAuthor }
+        record(12, au > 0
+            ? CheckItem("Авторство (E-E-A-T)", status: .passed, detail: "Сигналы авторства на \(au) из \(m) страниц.")
+            : CheckItem("Авторство (E-E-A-T)", status: .failed,
+                detail: "Указания автора/эксперта нет ни на одной из \(m) страниц.",
                 recommendation: "Добавьте автора (мета author, схема Person) — ИИ ценит экспертность источника."))
 
-        // Дата публикации/обновления
-        record(10, doc.hasDateSignal
-            ? CheckItem("Дата публикации/обновления", status: .passed, detail: "Дата материала размечена.")
-            : CheckItem("Дата публикации/обновления", status: .warning, detail: "Даты публикации нет.",
-                recommendation: "Указывайте дату (datePublished/<time>) — свежесть важна для ИИ-ответов."), credit: 0.3)
+        // Дата публикации/обновления — по сайту (нужна машиночитаемая, а не просто текст «Обновлено»)
+        let dt = cnt { $0.hasDate }
+        record(10, dt > 0
+            ? CheckItem("Дата публикации/обновления", status: .passed, detail: "Дата размечена на \(dt) из \(m) страниц.")
+            : CheckItem("Дата публикации/обновления", status: .warning,
+                detail: "Машиночитаемой даты (datePublished или <time datetime>) нет ни на одной из \(m) страниц.",
+                recommendation: "Текст «Обновлено …» не считается — добавьте datePublished/<time datetime>."), credit: 0.3)
 
         // Цитирование источников (внешние ссылки)
         let ext = doc.externalLinkCount(host: page.finalURL.host)
@@ -482,11 +492,15 @@ final class Analyzer {
                 recommendation: "Переходите на семантическую вёрстку (<article>, <section>, <main>)."))
         }
 
-        // Привязка к сущностям
-        record(8, doc.hasEntityAuthority
-            ? CheckItem("Связь с авторитетными сущностями", status: .passed, detail: "Есть sameAs/ссылки на Wikipedia/Wikidata.")
-            : CheckItem("Связь с авторитетными сущностями", status: .warning, detail: "Нет sameAs/привязки к Wikidata.",
-                recommendation: "Добавьте sameAs к Wikipedia/Wikidata/соцсетям — ИИ точнее идентифицирует бренд."), credit: 0.3)
+        // Привязка к авторитетным сущностям знаний — по сайту.
+        // Только Wikipedia/Wikidata/DBpedia/Knowledge Graph; sameAs на соцсети НЕ считается.
+        let wiki = cnt { $0.hasWikiAuthority }
+        record(8, wiki > 0
+            ? CheckItem("Связь с авторитетными сущностями", status: .passed,
+                detail: "Ссылки на Wikipedia/Wikidata найдены на \(wiki) из \(m) страниц.")
+            : CheckItem("Связь с авторитетными сущностями", status: .warning,
+                detail: "Ссылок на Wikipedia/Wikidata/Knowledge Graph нет (sameAs на соцсети к авторитетным сущностям не относится).",
+                recommendation: "Если бренд есть в Wikipedia/Wikidata — добавьте sameAs на них: ИИ точнее идентифицирует сущность."), credit: 0.3)
 
         // Глубина контента
         let words = doc.wordCount
@@ -528,6 +542,16 @@ final class Analyzer {
             return CategoryResult(category: .crawl, score: s.score, checks: checks)
         }
 
+        // Тип рендеринга (важно для честной трактовки результатов).
+        let spaPages = htmlPages.filter { $0.signals.isSPA }.count
+        if spaPages > 0 {
+            let spa = spaPages > total / 2
+            record(0, CheckItem("Тип рендеринга", status: .info,
+                detail: spa
+                    ? "Похоже на клиентский рендеринг (SPA): \(spaPages) из \(total) страниц. Часть контента, Title и разметки добавляется JavaScript уже в браузере. Поисковики, выполняющие JS (Google), это увидят; ИИ-краулеры и анализаторы без JS (включая этот) — нет."
+                    : "Клиентский рендеринг замечен на \(spaPages) из \(total) страниц."))
+        }
+
         // Битые ссылки/страницы
         if broken.isEmpty {
             record(20, CheckItem("Битые страницы (4xx/5xx)", status: .passed,
@@ -558,10 +582,18 @@ final class Analyzer {
         if dupGroups.isEmpty {
             record(12, CheckItem("Уникальность Title", status: .passed, detail: "Дубликатов Title нет."))
         } else {
+            // Часто дубли — это URL с параметрами (?id=…), где Title задаётся на клиенте через JS.
+            let dupTitles = Set(dupGroups.keys)
+            let queryDup = htmlPages.filter { p in
+                (p.title.map { dupTitles.contains($0) } ?? false) && p.url.contains("?")
+            }.count
+            var rec = "Сделайте Title уникальными — дубликаты конкурируют между собой."
+            if queryDup > 0 {
+                rec += " Похоже, часть дублей — это URL с параметрами (?id=…, ?cat=…), где уникальный Title подставляется на клиенте через JS: Google (рендерит JS) увидит уникальные заголовки, ИИ-краулеры без JS — нет. Для них стоит отдавать уникальный Title уже в исходном HTML (SSR/пререндер)."
+            }
             record(12, CheckItem("Уникальность Title", status: dupPages > total / 3 ? .failed : .warning,
                 detail: "Повторяющихся Title: \(dupGroups.count) (затрагивают \(dupPages) страниц).",
-                recommendation: "Сделайте Title уникальными — дубликаты конкурируют между собой."),
-                credit: 0.3)
+                recommendation: rec), credit: 0.3)
         }
 
         // Meta description
