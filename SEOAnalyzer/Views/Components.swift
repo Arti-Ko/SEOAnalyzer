@@ -1,5 +1,22 @@
 import SwiftUI
 
+extension View {
+    /// «Жидкое стекло» macOS 26+ с откатом на материал для прежних систем.
+    @ViewBuilder
+    func softSurface(_ shape: some Shape, material: Material = .regularMaterial) -> some View {
+        if #available(macOS 26.0, *) {
+            self.glassEffect(.regular, in: shape)
+        } else {
+            self.background(material, in: shape)
+        }
+    }
+
+    /// Материал для крупных панелей (фон сайдбара).
+    func panelSurface() -> some View {
+        self.background(.regularMaterial)
+    }
+}
+
 extension Grade {
     var color: Color {
         switch self {
@@ -42,19 +59,23 @@ struct GradeGauge: View {
     var body: some View {
         ZStack {
             Circle()
-                .stroke(Color.gray.opacity(0.15), lineWidth: size * 0.08)
+                .stroke(Color.primary.opacity(0.07), lineWidth: size * 0.085)
             Circle()
                 .trim(from: 0, to: CGFloat(score) / 100)
-                .stroke(grade.color,
-                        style: StrokeStyle(lineWidth: size * 0.08, lineCap: .round))
+                .stroke(
+                    AngularGradient(colors: [grade.color.opacity(0.7), grade.color],
+                                    center: .center),
+                    style: StrokeStyle(lineWidth: size * 0.085, lineCap: .round))
                 .rotationEffect(.degrees(-90))
-                .animation(.easeOut(duration: 0.8), value: score)
-            VStack(spacing: 2) {
+                .shadow(color: grade.color.opacity(0.35), radius: size * 0.04, y: 1)
+                .animation(.smooth(duration: 0.8), value: score)
+            VStack(spacing: 1) {
                 Text(grade.rawValue)
-                    .font(.system(size: size * 0.34, weight: .bold, design: .rounded))
+                    .font(.system(size: size * 0.36, weight: .bold, design: .rounded))
                     .foregroundStyle(grade.color)
-                Text("\(score)/100")
-                    .font(.system(size: size * 0.11, weight: .medium))
+                    .contentTransition(.numericText())
+                Text("\(score) / 100")
+                    .font(.system(size: size * 0.105, weight: .medium, design: .rounded))
                     .foregroundStyle(.secondary)
             }
         }
@@ -98,13 +119,15 @@ struct CategoryCard: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
         .background(
-            RoundedRectangle(cornerRadius: 10)
-                .fill(isSelected ? Color.accentColor.opacity(0.12) : Color.gray.opacity(0.06))
+            RoundedRectangle(cornerRadius: 11)
+                .fill(isSelected ? AnyShapeStyle(result.grade.color.opacity(0.14))
+                                 : AnyShapeStyle(.quaternary.opacity(0.5)))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(isSelected ? Color.accentColor.opacity(0.5) : .clear, lineWidth: 1.5)
+            RoundedRectangle(cornerRadius: 11)
+                .strokeBorder(isSelected ? result.grade.color.opacity(0.55) : .clear, lineWidth: 1.5)
         )
+        .contentShape(RoundedRectangle(cornerRadius: 11))
     }
 }
 
@@ -140,8 +163,17 @@ struct CheckRow: View {
             }
             Spacer(minLength: 0)
         }
-        .padding(.vertical, 10)
+        .padding(.vertical, 11)
         .padding(.horizontal, 14)
-        .background(RoundedRectangle(cornerRadius: 9).fill(Color.gray.opacity(0.05)))
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(.quaternary.opacity(0.4))
+        )
+        .overlay(alignment: .leading) {
+            RoundedRectangle(cornerRadius: 2)
+                .fill(check.status.color)
+                .frame(width: 3)
+                .padding(.vertical, 8)
+        }
     }
 }

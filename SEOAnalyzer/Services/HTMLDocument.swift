@@ -258,6 +258,13 @@ extension HTMLDocument {
     var listCount: Int  { matches("<(ul|ol)[ >]").count }
     var tableCount: Int { matches("<table[ >]").count }
 
+    /// Все значения href у ссылок (без якорей #...).
+    var anchorHrefs: [String] {
+        matches("<a[^>]*href=[\"']([^\"'#]+)[\"']")
+            .compactMap { group($0, 1) }
+            .filter { !$0.hasPrefix("javascript:") && !$0.hasPrefix("mailto:") && !$0.hasPrefix("tel:") }
+    }
+
     /// Количество внешних ссылок (на другие домены) — сигнал цитирования источников.
     func externalLinkCount(host: String?) -> Int {
         guard let host = host?.lowercased() else { return 0 }

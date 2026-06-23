@@ -68,33 +68,40 @@ final class Analyzer {
 
     // MARK: - Публичный API
 
-    func analyze(urlString: String) async throws -> AnalysisReport {
+    func analyze(urlString: String, crawlLimit: Int = 50) async throws -> AnalysisReport {
         guard let url = Self.normalizeURL(urlString) else { throw AnalyzerError.invalidURL }
 
         let page = try await fetch(url: url)
         let doc = HTMLDocument(html: page.html)
 
         // Параллельно подтягиваем служебные ресурсы.
-        async let robotsTextTask = fetchText(at: "/robots.txt", base: page.finalURL)
-        async let sitemapTask     = sitemapPresent(base: page.finalURL)
-        async let llmsTask         = resourceExists(at: "/llms.txt", base: page.finalURL)
+        async let robotsTextTask  = fetchText(at: "/robots.txt", base: page.finalURL)
+        async let sitemapTextTask = fetchText(at: "/sitemap.xml", base: page.finalURL)
+        async let llmsTask        = resourceExists(at: "/llms.txt", base: page.finalURL)
 
-        let robotsText = await robotsTextTask
-        let hasSitemap = await sitemapTask
-        let hasLLMs    = await llmsTask
-        let hasRobots  = robotsText != nil
-        let robots     = RobotsTxt(robotsText ?? "")
+        let robotsText  = await robotsTextTask
+        let sitemapText = await sitemapTextTask
+        let hasLLMs     = await llmsTask
+        let hasRobots   = robotsText != nil
+        let hasSitemap  = sitemapText != nil
+        let robots      = RobotsTxt(robotsText ?? "")
+
+        // Глубокий обход сайта: засеваем ссылками из sitemap.
+        let seeds = sitemapText.map { SiteCrawler.parseSitemap($0) } ?? []
+        let crawler = SiteCrawler(session: session, maxPages: crawlLimit)
+        let scans = await crawler.crawl(start: page.finalURL, seeds: seeds)
 
         let seo         = analyzeSEO(doc: doc, hasRobots: hasRobots, hasSitemap: hasSitemap)
         let aeo         = analyzeAEO(doc: doc)
         let geo         = analyzeGEO(doc: doc, page: page, robots: robots, hasRobots: hasRobots, hasLLMs: hasLLMs)
+        let crawl       = analyzeCrawl(scans: scans, hasSitemap: hasSitemap)
         let performance = analyzePerformance(doc: doc, page: page)
         let usability   = analyzeUsability(doc: doc, page: page)
         let security    = analyzeSecurity(page: page)
         let social      = analyzeSocial(doc: doc)
 
         // Порядок — как в SEOCategory.allCases.
-        let categories = [seo, aeo, geo, performance, usability, security, social]
+        let categories = [seo, aeo, geo, crawl, performance, usability, security, social]
         let overall = Self.weightedScore(categories)
 
         return AnalysisReport(
@@ -110,7 +117,8 @@ final class Analyzer {
             pageSizeBytes: page.byteCount,
             responseTimeMs: page.responseTimeMs,
             serverHeader: page.headers["server"],
-            ipInfo: page.finalURL.host
+            ipInfo: page.finalURL.host,
+            pagesScanned: max(1, scans.count)
         )
     }
 
@@ -493,6 +501,129 @@ final class Analyzer {
         }
 
         return CategoryResult(category: .geo, score: s.score, checks: checks)
+    }
+
+    // MARK: - Сканирование сайта (site-wide)
+
+    private func analyzeCrawl(scans: [PageScan], hasSitemap: Bool) -> CategoryResult {
+        var checks: [CheckItem] = []
+        var s = Scorer()
+        func record(_ w: Double, _ item: CheckItem, credit: Double = 0.33) {
+            checks.append(item); s.add(w, item.status, credit: credit)
+        }
+
+        let htmlPages = scans.filter { $0.isHTML && $0.status >= 200 && $0.status < 400 }
+        let total = htmlPages.count
+        let broken = scans.filter { $0.status >= 400 || $0.status < 0 }
+
+        // Сколько страниц обойдено
+        record(0, CheckItem("Охват сканирования", status: .info,
+            detail: "Просканировано страниц: \(scans.count) (HTML-страниц: \(total))."
+                + (hasSitemap ? " Засев из sitemap.xml." : "")))
+
+        guard total > 0 else {
+            record(10, CheckItem("Доступность сайта", status: .failed,
+                detail: "Не удалось обойти ни одной HTML-страницы.",
+                recommendation: "Проверьте доступность сайта и внутренние ссылки."))
+            return CategoryResult(category: .crawl, score: s.score, checks: checks)
+        }
+
+        // Битые ссылки/страницы
+        if broken.isEmpty {
+            record(20, CheckItem("Битые страницы (4xx/5xx)", status: .passed,
+                detail: "Недоступных страниц не обнаружено."))
+        } else {
+            let examples = broken.prefix(5).map { scan -> String in
+                let code = scan.status == -1 ? "ошибка сети" : String(scan.status)
+                return "\(code) — \(scan.url)"
+            }
+            record(20, CheckItem("Битые страницы (4xx/5xx)", status: .failed,
+                detail: "Недоступных страниц: \(broken.count).\n" + examples.joined(separator: "\n"),
+                recommendation: "Исправьте или удалите ссылки на недоступные страницы."))
+        }
+
+        // Title на всех страницах
+        let noTitle = htmlPages.filter { ($0.title?.isEmpty ?? true) }.count
+        record(14, ratioCheck("Title на страницах", bad: noTitle, total: total,
+            okDetail: "У всех \(total) страниц есть Title.",
+            badDetail: "Без Title: \(noTitle) из \(total).",
+            rec: "Задайте уникальный Title каждой странице."))
+
+        // Уникальность Title (дубликаты)
+        let titles = htmlPages.compactMap { $0.title?.isEmpty == false ? $0.title! : nil }
+        var counts: [String: Int] = [:]
+        for t in titles { counts[t, default: 0] += 1 }
+        let dupGroups = counts.filter { $0.value > 1 }
+        let dupPages = dupGroups.values.reduce(0, +)
+        if dupGroups.isEmpty {
+            record(12, CheckItem("Уникальность Title", status: .passed, detail: "Дубликатов Title нет."))
+        } else {
+            record(12, CheckItem("Уникальность Title", status: dupPages > total / 3 ? .failed : .warning,
+                detail: "Повторяющихся Title: \(dupGroups.count) (затрагивают \(dupPages) страниц).",
+                recommendation: "Сделайте Title уникальными — дубликаты конкурируют между собой."),
+                credit: 0.3)
+        }
+
+        // Meta description
+        let noDesc = htmlPages.filter { !$0.hasDescription }.count
+        record(12, ratioCheck("Meta Description на страницах", bad: noDesc, total: total,
+            okDetail: "Описание есть у всех \(total) страниц.",
+            badDetail: "Без описания: \(noDesc) из \(total).",
+            rec: "Добавьте мета-описание каждой странице."))
+
+        // H1
+        let noH1 = htmlPages.filter { $0.h1Count == 0 }.count
+        let multiH1 = htmlPages.filter { $0.h1Count > 1 }.count
+        if noH1 == 0 && multiH1 == 0 {
+            record(10, CheckItem("Заголовки H1 по сайту", status: .passed, detail: "У всех страниц ровно один H1."))
+        } else {
+            record(10, CheckItem("Заголовки H1 по сайту",
+                status: (noH1 + multiH1) > total / 3 ? .failed : .warning,
+                detail: "Без H1: \(noH1), с несколькими H1: \(multiH1) (из \(total)).",
+                recommendation: "На каждой странице должен быть один H1."), credit: 0.4)
+        }
+
+        // Тонкие страницы
+        let thin = htmlPages.filter { $0.wordCount < 300 }.count
+        record(8, ratioCheck("Тонкие страницы (<300 слов)", bad: thin, total: total,
+            okDetail: "Тонких страниц нет.",
+            badDetail: "Тонких страниц: \(thin) из \(total).",
+            rec: "Наполните тонкие страницы содержательным текстом."))
+
+        // HTTPS на всех страницах
+        let httpPages = htmlPages.filter { !$0.isHTTPS }.count
+        record(12, httpPages == 0
+            ? CheckItem("HTTPS на всех страницах", status: .passed, detail: "Все страницы по HTTPS.")
+            : CheckItem("HTTPS на всех страницах", status: .failed,
+                detail: "Страниц по HTTP: \(httpPages) из \(total).",
+                recommendation: "Переведите все страницы на HTTPS, уберите смешанный контент."))
+
+        // noindex по сайту
+        let noindex = htmlPages.filter { $0.noindex }.count
+        record(6, noindex == 0
+            ? CheckItem("Индексация страниц", status: .passed, detail: "Закрытых от индексации страниц нет.")
+            : CheckItem("Индексация страниц", status: .warning,
+                detail: "Закрыто от индексации: \(noindex) из \(total).",
+                recommendation: "Проверьте, что важные страницы не закрыты noindex."), credit: 0.4)
+
+        // Средняя скорость по сайту
+        let avg = htmlPages.map { $0.responseMs }.reduce(0, +) / max(1, total)
+        if avg < 800 {
+            record(6, CheckItem("Средняя скорость по сайту", status: .passed, detail: "~\(avg) мс на страницу."))
+        } else {
+            record(6, CheckItem("Средняя скорость по сайту", status: .warning, detail: "~\(avg) мс на страницу.",
+                recommendation: "Оптимизируйте медленные страницы."), credit: 0.4)
+        }
+
+        return CategoryResult(category: .crawl, score: s.score, checks: checks)
+    }
+
+    /// Помощник: проверка по доле «плохих» страниц.
+    private func ratioCheck(_ title: String, bad: Int, total: Int,
+                            okDetail: String, badDetail: String, rec: String) -> CheckItem {
+        if bad == 0 { return CheckItem(title, status: .passed, detail: okDetail) }
+        let status: CheckStatus = Double(bad) / Double(total) < 0.3 ? .warning : .failed
+        return CheckItem(title, status: status, detail: badDetail, recommendation: rec)
     }
 
     // MARK: - Производительность

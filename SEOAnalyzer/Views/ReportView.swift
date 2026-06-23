@@ -52,7 +52,7 @@ struct ReportView: View {
                     .padding(.bottom, 18)
             }
         }
-        .background(Color(nsColor: .controlBackgroundColor))
+        .panelSurface()
     }
 
     private var exportButtons: some View {
@@ -125,12 +125,12 @@ struct ReportView: View {
                 .font(.system(size: 15, weight: .bold))
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())],
                       spacing: 10) {
+                metricTile("Страниц обойдено", "\(report.pagesScanned)", "point.3.connected.trianglepath.dotted")
                 metricTile("Время ответа", "\(report.responseTimeMs) мс", "speedometer")
                 metricTile("Размер HTML", "\(report.pageSizeBytes / 1024) КБ", "doc")
                 metricTile("Слов на странице", "\(report.wordCount)", "text.alignleft")
                 metricTile("Заголовков H1", "\(report.h1Texts.count)", "textformat.size")
                 metricTile("Title", report.pageTitle == nil ? "нет" : "есть", "character.cursor.ibeam")
-                metricTile("Описание", report.metaDescription == nil ? "нет" : "есть", "text.quote")
             }
         }
         .padding(16)

@@ -59,13 +59,14 @@ enum PDFExporter {
                    x: rect.minX + pad, topY: r.cursorY + 64, width: rect.width - 150)
 
         // Бейдж итоговой оценки справа
-        let badge = CGRect(x: rect.maxX - pad - 92, y: rect.minY + 14, width: 92, height: bandH - 28)
-        r.fillRounded(badge, radius: 12, color: .white)
+        let badge = CGRect(x: rect.maxX - pad - 96, y: rect.minY + 14, width: 96, height: bandH - 28)
+        r.fillRounded(badge, radius: 14, color: .white)
         let g = report.overallGrade
-        r.drawTextCentered(attr(g.rawValue, 34, .heavy, nsColor(g.color)), in:
-            CGRect(x: badge.minX, y: badge.minY + 30, width: badge.width, height: 40))
-        r.drawTextCentered(attr("\(report.overallScore)/100", 11, .semibold, subtle), in:
-            CGRect(x: badge.minX, y: badge.minY + 12, width: badge.width, height: 16))
+        // Буква оценки (rect заведомо выше высоты строки, иначе CoreText её обрезает).
+        r.drawTextCentered(attr(g.rawValue, 30, .heavy, nsColor(g.color)),
+                           in: CGRect(x: badge.minX, y: badge.minY + 24, width: badge.width, height: 46))
+        r.drawTextCentered(attr("\(report.overallScore) / 100", 11, .semibold, subtle),
+                           in: CGRect(x: badge.minX, y: badge.minY + 9, width: badge.width, height: 17))
 
         r.cursorY += bandH + 18
     }
@@ -98,6 +99,7 @@ enum PDFExporter {
     private static func drawKeyMetrics(_ r: Renderer, report: AnalysisReport) {
         r.section("Ключевые показатели")
         let metrics: [(String, String)] = [
+            ("Страниц просканировано", "\(report.pagesScanned)"),
             ("Время ответа", "\(report.responseTimeMs) мс"),
             ("Размер HTML", "\(report.pageSizeBytes / 1024) КБ"),
             ("Слов на странице", "\(report.wordCount)"),
@@ -128,23 +130,33 @@ enum PDFExporter {
     }
 
     private static func drawCategory(_ r: Renderer, result: CategoryResult) {
-        // Заголовок категории — цветная плашка
-        r.ensure(40)
-        let barH: CGFloat = 30
+        // Заголовок категории — цветная плашка фиксированной высоты (без переноса).
+        let barH: CGFloat = 42
+        r.ensure(barH + 14)
         let bar = CGRect(x: margin, y: r.top(barH), width: r.contentW, height: barH)
-        r.fillRounded(bar, radius: 8, color: nsColor(result.grade.color).withAlphaComponent(0.14))
-        r.fillRounded(CGRect(x: bar.minX, y: bar.minY, width: 4, height: barH), radius: 2, color: nsColor(result.grade.color))
-        r.drawText(attr(result.category.fullName, 13, .bold, ink), x: bar.minX + 14, topY: r.cursorY + 8, width: bar.width - 130)
+        let gc = nsColor(result.grade.color)
+        r.fillRounded(bar, radius: 10, color: gc.withAlphaComponent(0.12))
+        r.fillRounded(CGRect(x: bar.minX, y: bar.minY, width: 4, height: barH), radius: 2, color: gc)
+
+        // Правая часть: чип + балл (с запасом по ширине, чтобы «100/100» не переносился).
+        let scoreW: CGFloat = 60
+        let scoreX = bar.maxX - 16 - scoreW
+        let chipW: CGFloat = 34
+        let chipX = scoreX - 12 - chipW
+        r.drawGradeChip(result.grade, x: chipX, topY: r.cursorY + 11)
+        r.drawText(attr("\(result.score) / 100", 12, .semibold, subtle), x: scoreX, topY: r.cursorY + 14, width: scoreW)
+
+        // Левая часть: короткое имя + одна строка статистики.
+        let titleW = chipX - (bar.minX + 16) - 10
+        r.drawText(attr(result.category.fullName, 14, .bold, ink), x: bar.minX + 16, topY: r.cursorY + 8, width: titleW)
         r.drawText(attr("Пройдено \(result.passedCount) · Замечаний \(result.warningCount) · Ошибок \(result.failedCount)",
-                        8.5, .regular, subtle), x: bar.minX + 14, topY: r.cursorY + 22, width: bar.width - 130)
-        r.drawGradeChip(result.grade, x: bar.maxX - 80, topY: r.cursorY + 2)
-        r.drawText(attr("\(result.score)/100", 11, .semibold, subtle), x: bar.maxX - 44, topY: r.cursorY + 8, width: 44)
-        r.cursorY += barH + 10
+                        8.5, .regular, subtle), x: bar.minX + 16, topY: r.cursorY + 27, width: titleW)
+        r.cursorY += barH + 12
 
         for check in result.checks {
             drawCheck(r, check: check)
         }
-        r.cursorY += 8
+        r.cursorY += 10
     }
 
     private static func drawCheck(_ r: Renderer, check: CheckItem) {

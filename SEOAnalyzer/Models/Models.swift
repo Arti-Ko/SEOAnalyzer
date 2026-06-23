@@ -76,6 +76,7 @@ enum SEOCategory: String, CaseIterable, Codable, Identifiable {
     case seo         = "SEO"
     case aeo         = "AEO"
     case geo         = "GEO"
+    case crawl       = "Сканирование"
     case performance = "Производительность"
     case usability   = "Удобство"
     case security    = "Безопасность"
@@ -83,12 +84,13 @@ enum SEOCategory: String, CaseIterable, Codable, Identifiable {
 
     var id: String { rawValue }
 
-    /// Подробное название для отчётов.
+    /// Подробное название для отчётов (короткое — для заголовков плашек).
     var fullName: String {
         switch self {
-        case .seo:         return "SEO — классическая поисковая оптимизация"
-        case .aeo:         return "AEO — оптимизация под ответные системы (сниппеты, голосовой поиск)"
-        case .geo:         return "GEO — оптимизация под генеративные ИИ-поисковики"
+        case .seo:         return "SEO — поисковая оптимизация"
+        case .aeo:         return "AEO — ответные системы и сниппеты"
+        case .geo:         return "GEO — генеративные ИИ-поисковики"
+        case .crawl:       return "Сканирование сайта (все страницы)"
         case .performance: return "Производительность"
         case .usability:   return "Удобство использования"
         case .security:    return "Безопасность"
@@ -99,13 +101,14 @@ enum SEOCategory: String, CaseIterable, Codable, Identifiable {
     /// Вес категории в итоговом балле (в сумме 1.0).
     var weight: Double {
         switch self {
-        case .seo:         return 0.30
-        case .aeo:         return 0.14
-        case .geo:         return 0.14
-        case .performance: return 0.15
-        case .usability:   return 0.10
+        case .seo:         return 0.24
+        case .aeo:         return 0.12
+        case .geo:         return 0.12
+        case .crawl:       return 0.15
+        case .performance: return 0.13
+        case .usability:   return 0.08
         case .security:    return 0.10
-        case .social:      return 0.07
+        case .social:      return 0.06
         }
     }
 
@@ -114,6 +117,7 @@ enum SEOCategory: String, CaseIterable, Codable, Identifiable {
         case .seo:         return "magnifyingglass"
         case .aeo:         return "questionmark.bubble"
         case .geo:         return "sparkles"
+        case .crawl:       return "point.3.connected.trianglepath.dotted"
         case .performance: return "speedometer"
         case .usability:   return "hand.tap"
         case .security:    return "lock.shield"
@@ -180,6 +184,7 @@ struct AnalysisReport: Identifiable, Codable {
     var responseTimeMs: Int
     var serverHeader: String?
     var ipInfo: String?
+    var pagesScanned: Int = 1
 
     /// Удобный доступ к категории.
     func result(for category: SEOCategory) -> CategoryResult? {

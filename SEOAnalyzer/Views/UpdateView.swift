@@ -105,10 +105,20 @@ struct UpdatePromptView: View {
 /// Окно настроек (доступно через меню «SEO-Анализатор → Настройки…», ⌘,).
 struct SettingsView: View {
     @AppStorage("autoCheckUpdates") private var autoCheck = true
+    @AppStorage("crawlLimit") private var crawlLimit = 50
     @ObservedObject private var updater = UpdateService.shared
 
     var body: some View {
         Form {
+            Section("Глубина сканирования") {
+                Stepper(value: $crawlLimit, in: 5...300, step: 5) {
+                    LabeledContent("Максимум страниц для обхода", value: "\(crawlLimit)")
+                }
+                Text("Анализатор обходит сайт по внутренним ссылкам и sitemap. Чем больше страниц — тем точнее и честнее картина по всему сайту, но дольше анализ.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("Обновления") {
                 Toggle("Проверять обновления автоматически при запуске", isOn: $autoCheck)
 
@@ -152,6 +162,6 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 480, height: 320)
+        .frame(width: 500, height: 440)
     }
 }

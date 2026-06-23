@@ -53,10 +53,10 @@ struct ContentView: View {
                     .font(.system(size: 13))
                     .onSubmit { if vm.canAnalyze { vm.runAnalysis() } }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(RoundedRectangle(cornerRadius: 8).fill(Color.gray.opacity(0.1)))
-            .frame(maxWidth: 420)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 9)
+            .softSurface(Capsule())
+            .frame(maxWidth: 440)
 
             Button(action: vm.runAnalysis) {
                 Text("Анализировать")
@@ -83,15 +83,20 @@ struct ContentView: View {
     // MARK: - Состояния
 
     private var loadingView: some View {
-        VStack(spacing: 18) {
+        VStack(spacing: 16) {
             Spacer()
+            Image(systemName: "point.3.connected.trianglepath.dotted")
+                .font(.system(size: 40))
+                .foregroundStyle(.tint)
+                .symbolEffect(.variableColor.iterative, options: .repeating)
             ProgressView()
-                .scaleEffect(1.4)
-            Text("Анализируем сайт…")
-                .font(.system(size: 15, weight: .medium))
-            Text("Загружаем страницу, заголовки, robots.txt и карту сайта.")
+                .controlSize(.large)
+            Text("Глубоко сканируем сайт…")
+                .font(.system(size: 15, weight: .semibold))
+            Text("Обходим страницы по внутренним ссылкам и sitemap,\nпроверяем SEO, AEO, GEO, скорость, безопасность и доступность.")
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -128,17 +133,18 @@ struct ContentView: View {
     }
 
     private var categoriesLegend: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: 10) {
             ForEach(SEOCategory.allCases) { cat in
-                VStack(spacing: 6) {
+                VStack(spacing: 7) {
                     Image(systemName: cat.iconName)
-                        .font(.system(size: 20))
+                        .font(.system(size: 19))
                         .foregroundStyle(.tint)
                     Text(cat.rawValue)
-                        .font(.system(size: 11, weight: .medium))
+                        .font(.system(size: 10.5, weight: .medium))
+                        .lineLimit(1)
                 }
-                .frame(width: 92, height: 64)
-                .background(RoundedRectangle(cornerRadius: 10).fill(Color.gray.opacity(0.06)))
+                .frame(width: 82, height: 64)
+                .softSurface(RoundedRectangle(cornerRadius: 12))
             }
         }
     }

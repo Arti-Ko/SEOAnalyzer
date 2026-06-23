@@ -128,11 +128,11 @@ final class UpdateService: ObservableObject {
 
             let newApp: URL?
             if isDMG {
-                newApp = try extractAppFromDMG(downloaded, workDir: workDir)
+                newApp = try await extractAppFromDMG(downloaded, workDir: workDir)
             } else {
                 let extractDir = workDir.appendingPathComponent("extracted")
                 try fm.createDirectory(at: extractDir, withIntermediateDirectories: true)
-                try runProcess("/usr/bin/ditto", ["-x", "-k", downloaded.path, extractDir.path])
+                try await runProcessAsync("/usr/bin/ditto", ["-x", "-k", downloaded.path, extractDir.path])
                 newApp = findApp(in: extractDir)
             }
 
@@ -149,25 +149,33 @@ final class UpdateService: ObservableObject {
     }
 
     /// Монтирует DMG, копирует из него .app во временную папку и размонтирует образ.
-    private func extractAppFromDMG(_ dmgPath: URL, workDir: URL) throws -> URL {
+    private func extractAppFromDMG(_ dmgPath: URL, workDir: URL) async throws -> URL {
         let fm = FileManager.default
         let mountPoint = workDir.appendingPathComponent("mnt")
         try fm.createDirectory(at: mountPoint, withIntermediateDirectories: true)
 
-        try runProcess("/usr/bin/hdiutil",
-                       ["attach", dmgPath.path, "-nobrowse", "-noautoopen",
-                        "-mountpoint", mountPoint.path])
-        defer {
-            _ = try? runProcess("/usr/bin/hdiutil", ["detach", mountPoint.path, "-force"])
+        try await runProcessAsync("/usr/bin/hdiutil",
+                                  ["attach", dmgPath.path, "-nobrowse", "-noautoopen",
+                                   "-mountpoint", mountPoint.path])
+
+        func detach() async {
+            _ = try? await runProcessAsync("/usr/bin/hdiutil", ["detach", mountPoint.path, "-force"])
         }
 
         guard let app = findApp(in: mountPoint) else {
+            await detach()
             throw NSError(domain: "UpdateService", code: -10,
                           userInfo: [NSLocalizedDescriptionKey: "В образе DMG не найдено приложение."])
         }
         // Копируем приложение из тома наружу, прежде чем размонтировать.
         let dest = workDir.appendingPathComponent(app.lastPathComponent)
-        try runProcess("/usr/bin/ditto", [app.path, dest.path])
+        do {
+            try await runProcessAsync("/usr/bin/ditto", [app.path, dest.path])
+        } catch {
+            await detach()
+            throw error
+        }
+        await detach()
         return dest
     }
 
@@ -197,34 +205,62 @@ final class UpdateService: ObservableObject {
         return nil
     }
 
-    private func runProcess(_ launchPath: String, _ args: [String]) throws {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: launchPath)
-        process.arguments = args
-        try process.run()
-        process.waitUntilExit()
-        if process.terminationStatus != 0 {
-            throw NSError(domain: "UpdateService", code: Int(process.terminationStatus),
-                          userInfo: [NSLocalizedDescriptionKey:
-                            "\(launchPath) завершился с кодом \(process.terminationStatus)"])
+    /// Запускает внешний процесс в фоне (не блокируя главный поток UI).
+    nonisolated private func runProcessAsync(_ launchPath: String, _ args: [String]) async throws {
+        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: launchPath)
+                process.arguments = args
+                do {
+                    try process.run()
+                    process.waitUntilExit()
+                    if process.terminationStatus != 0 {
+                        cont.resume(throwing: NSError(domain: "UpdateService",
+                            code: Int(process.terminationStatus),
+                            userInfo: [NSLocalizedDescriptionKey:
+                                "\(launchPath) завершился с кодом \(process.terminationStatus)"]))
+                    } else {
+                        cont.resume()
+                    }
+                } catch {
+                    cont.resume(throwing: error)
+                }
+            }
         }
     }
 
     /// Готовит и запускает скрипт замены бандла, затем завершает приложение.
+    /// Скрипт стартует мгновенно и работает в фоне — главный поток не блокируется.
     private func relaunch(replacing current: URL, with newApp: URL) throws {
-        let pid = ProcessInfo.processInfo.processIdentifier
         let cur = current.path
+
+        // Защита от App Translocation: macOS запускает скачанные приложения из
+        // временной read-only копии. Заменить такой бандл нельзя — просим перенести.
+        if cur.contains("/AppTranslocation/") {
+            throw NSError(domain: "UpdateService", code: -20, userInfo: [NSLocalizedDescriptionKey:
+                "Приложение запущено из временной карантинной копии. Перенесите SEO-Анализатор в «Программы» и выполните в Терминале: xattr -cr /Applications/SEOAnalyzer.app, затем повторите обновление."])
+        }
+
+        let pid = ProcessInfo.processInfo.processIdentifier
         let new = newApp.path
+        let logPath = NSTemporaryDirectory() + "seo-update.log"
 
         let script = """
         #!/bin/bash
-        # Ждём, пока завершится текущий экземпляр приложения.
-        while kill -0 \(pid) 2>/dev/null; do sleep 0.3; done
+        exec > "\(logPath)" 2>&1
+        set -x
+        # Ждём завершения текущего экземпляра приложения.
+        for i in $(seq 1 100); do
+            /bin/kill -0 \(pid) 2>/dev/null || break
+            sleep 0.2
+        done
         /usr/bin/ditto "\(new)" "\(cur).new" || exit 1
         /bin/rm -rf "\(cur)"
-        /bin/mv "\(cur).new" "\(cur)"
+        /bin/mv "\(cur).new" "\(cur)" || exit 1
         /usr/bin/xattr -dr com.apple.quarantine "\(cur)" 2>/dev/null
-        /usr/bin/open "\(cur)"
+        sleep 0.4
+        /usr/bin/open -n "\(cur)"
         """
 
         let scriptURL = FileManager.default.temporaryDirectory
@@ -234,9 +270,9 @@ final class UpdateService: ObservableObject {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/bash")
         process.arguments = [scriptURL.path]
-        try process.run()
+        try process.run()  // стартует мгновенно, дальше работает сам
 
-        // Завершаем приложение, чтобы скрипт мог заменить бандл.
+        // Завершаем приложение, чтобы скрипт мог заменить бандл и перезапустить его.
         NSApp.terminate(nil)
     }
 

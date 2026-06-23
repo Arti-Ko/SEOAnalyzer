@@ -23,9 +23,10 @@ final class AnalysisViewModel: ObservableObject {
         isAnalyzing = true
         report = nil
 
+        let limit = max(1, UserDefaults.standard.object(forKey: "crawlLimit") as? Int ?? 50)
         Task {
             do {
-                let result = try await analyzer.analyze(urlString: input)
+                let result = try await analyzer.analyze(urlString: input, crawlLimit: limit)
                 self.report = result
             } catch {
                 self.errorMessage = (error as? LocalizedError)?.errorDescription
