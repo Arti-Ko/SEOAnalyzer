@@ -1,0 +1,79 @@
+name: Сборка и релиз macOS-приложения
+
+# Запускается при пуше тега вида v1.2.3, либо вручную из вкладки Actions.
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Версия релиза (например, v1.1.0)'
+        required: true
+        default: 'v1.0.0'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Сборка приложения
+    runs-on: macos-14
+    steps:
+      - name: Получение исходников
+        uses: actions/checkout@v4
+
+      - name: Выбор Xcode
+        run: sudo xcode-select -switch /Applications/Xcode_16.app 2>/dev/null || sudo xcode-select -switch /Applications/Xcode.app
+
+      - name: Определение версии
+        id: ver
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Сборка (Release, без подписи)
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project SEOAnalyzer.xcodeproj \
+            -scheme SEOAnalyzer \
+            -configuration Release \
+            -derivedDataPath build \
+            CODE_SIGN_IDENTITY="-" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            ENABLE_HARDENED_RUNTIME=NO \
+            clean build
+
+      - name: Упаковка .app в zip
+        run: |
+          APP_PATH="build/Build/Products/Release/SEOAnalyzer.app"
+          if [ ! -d "$APP_PATH" ]; then
+            echo "Не найдено собранное приложение по пути $APP_PATH"
+            find build -name "*.app" -maxdepth 5 || true
+            exit 1
+          fi
+          # Ad-hoc подпись, чтобы приложение запускалось без предупреждений о повреждении.
+          codesign --force --deep --sign - "$APP_PATH" || true
+          ditto -c -k --keepParent "$APP_PATH" "SEOAnalyzer.zip"
+          ls -lh SEOAnalyzer.zip
+
+      - name: Публикация релиза
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: SEO-Анализатор ${{ steps.ver.outputs.tag }}
+          generate_release_notes: true
+          files: SEOAnalyzer.zip
+          body: |
+            Автоматическая сборка SEO-Анализатора.
+
+            Установка: скачайте `SEOAnalyzer.zip`, распакуйте и переместите
+            `SEOAnalyzer.app` в папку «Программы». При первом запуске —
+            правый клик → «Открыть» (приложение не подписано сертификатом разработчика).
+
+            Встроенный механизм обновлений найдёт этот релиз автоматически.
