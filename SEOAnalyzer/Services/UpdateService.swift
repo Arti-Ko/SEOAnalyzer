@@ -250,17 +250,21 @@ final class UpdateService: ObservableObject {
         #!/bin/bash
         exec > "\(logPath)" 2>&1
         set -x
-        # Ждём завершения текущего экземпляра приложения.
-        for i in $(seq 1 100); do
+        # Ждём завершения текущего экземпляра приложения (не дольше ~10 c).
+        for i in $(seq 1 50); do
             /bin/kill -0 \(pid) 2>/dev/null || break
             sleep 0.2
         done
+        # На всякий случай добиваем процесс, если он ещё жив, чтобы не было двух копий.
+        /bin/kill -9 \(pid) 2>/dev/null
+        sleep 0.3
         /usr/bin/ditto "\(new)" "\(cur).new" || exit 1
         /bin/rm -rf "\(cur)"
         /bin/mv "\(cur).new" "\(cur)" || exit 1
         /usr/bin/xattr -dr com.apple.quarantine "\(cur)" 2>/dev/null
         sleep 0.4
-        /usr/bin/open -n "\(cur)"
+        # Открываем заменённый бандл (без -n: старый уже завершён, дубля не будет).
+        /usr/bin/open "\(cur)"
         """
 
         let scriptURL = FileManager.default.temporaryDirectory
@@ -273,7 +277,10 @@ final class UpdateService: ObservableObject {
         try process.run()  // стартует мгновенно, дальше работает сам
 
         // Завершаем приложение, чтобы скрипт мог заменить бандл и перезапустить его.
+        // Штатное завершение + жёсткий фолбэк: если terminate не сработает,
+        // старый экземпляр остался бы висеть с открытым окном обновления.
         NSApp.terminate(nil)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { exit(0) }
     }
 
     // MARK: - Сравнение версий
