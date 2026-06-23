@@ -45,6 +45,9 @@ final class UpdateService: ObservableObject {
     @Published var latest: GitHubRelease?
     @Published var message: String?
     @Published var downloadProgress: Double = 0
+    @Published var downloadedBytes: Int64 = 0
+    @Published var totalBytes: Int64 = 0
+    @Published var estimatedSecondsRemaining: Double?
     @Published var showSheet = false
 
     private init() {}
@@ -109,12 +112,30 @@ final class UpdateService: ObservableObject {
 
         let isDMG = asset.name.lowercased().hasSuffix(".dmg")
         phase = .downloading
-        downloadProgress = 0.1
+        downloadProgress = 0
+        downloadedBytes = 0
+        totalBytes = 0
+        estimatedSecondsRemaining = nil
         let fm = FileManager.default
 
         do {
-            let (tempFile, _) = try await URLSession.shared.download(from: url)
-            downloadProgress = 0.6
+            let downloader = ProgressDownloader { [weak self] fraction, written, total, elapsed in
+                Task { @MainActor in
+                    guard let self else { return }
+                    self.downloadProgress = fraction
+                    self.downloadedBytes = written
+                    self.totalBytes = total
+                    // Оценка по средней скорости с начала закачки — простая, но
+                    // достаточно точная для пользовательского ETA.
+                    if elapsed > 0.3, written > 0, total > 0 {
+                        let bytesPerSecond = Double(written) / elapsed
+                        let remaining = Double(total - written)
+                        self.estimatedSecondsRemaining = bytesPerSecond > 0 ? remaining / bytesPerSecond : nil
+                    }
+                }
+            }
+            let tempFile = try await downloader.download(url)
+            estimatedSecondsRemaining = nil
 
             let workDir = fm.temporaryDirectory
                 .appendingPathComponent("SEOAnalyzerUpdate-\(UUID().uuidString)")
@@ -123,8 +144,9 @@ final class UpdateService: ObservableObject {
             let downloaded = workDir.appendingPathComponent(isDMG ? "update.dmg" : "update.zip")
             try fm.moveItem(at: tempFile, to: downloaded)
 
+            // Дальше — монтирование/распаковка без побайтового прогресса,
+            // показываем неопределённый индикатор (UpdateView сам решает по фазе).
             phase = .installing
-            downloadProgress = 0.8
 
             let newApp: URL?
             if isDMG {

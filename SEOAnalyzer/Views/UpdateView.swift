@@ -11,9 +11,11 @@ struct UpdatePromptView: View {
             case .checking:
                 progress("Проверяем обновления…")
             case .downloading:
-                progress("Скачиваем обновление…", value: updater.downloadProgress)
+                progress("Скачиваем обновление…",
+                         value: updater.totalBytes > 0 ? updater.downloadProgress : nil,
+                         detail: downloadDetail)
             case .installing:
-                progress("Устанавливаем обновление…", value: updater.downloadProgress)
+                progress("Устанавливаем обновление…")
             case .available:
                 available
             case .upToDate:
@@ -70,21 +72,37 @@ struct UpdatePromptView: View {
         }
     }
 
-    private func progress(_ title: String, value: Double? = nil) -> some View {
+    private func progress(_ title: String, value: Double? = nil, detail: String? = nil) -> some View {
         VStack(spacing: 14) {
             if let value {
                 ProgressView(value: value).progressViewStyle(.linear)
             } else {
                 ProgressView().scaleEffect(1.2)
             }
-            Text(title).font(.system(size: 14, weight: .medium))
+            HStack(spacing: 6) {
+                Text(title).font(.system(size: 14, weight: .medium))
+                if let value {
+                    Text("\(Int((value * 100).rounded()))%")
+                        .font(.system(size: 14, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.tint)
+                        .contentTransition(.numericText())
+                }
+            }
+            if let detail {
+                Text(detail)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
             Text("Приложение перезапустится автоматически после установки.")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity)
+        .animation(.smooth(duration: 0.3), value: value)
     }
+
+    private var downloadDetail: String? { updateDownloadDetail(updater) }
 
     private func info(icon: String, color: Color, title: String, text: String) -> some View {
         VStack(spacing: 12) {
@@ -100,6 +118,25 @@ struct UpdatePromptView: View {
         }
         .frame(maxWidth: .infinity)
     }
+}
+
+/// Размер загруженного/общего и оценка оставшегося времени, например
+/// «4,2 из 9,8 МБ · осталось ~6 с». Общая для модального окна и настроек.
+@MainActor
+func updateDownloadDetail(_ updater: UpdateService) -> String? {
+    guard updater.totalBytes > 0 else { return nil }
+    let bf = ByteCountFormatter()
+    bf.countStyle = .file
+    let sizePart = "\(bf.string(fromByteCount: updater.downloadedBytes)) из \(bf.string(fromByteCount: updater.totalBytes))"
+    guard let eta = updater.estimatedSecondsRemaining, eta.isFinite, eta > 0 else { return sizePart }
+    return "\(sizePart) · осталось ~\(formatETA(eta))"
+}
+
+func formatETA(_ seconds: Double) -> String {
+    let s = Int(seconds.rounded())
+    if s < 60 { return "\(max(1, s)) с" }
+    let minutes = s / 60, secs = s % 60
+    return secs == 0 ? "\(minutes) мин" : "\(minutes) мин \(secs) с"
 }
 
 /// Окно настроек (доступно через меню «SEO-Анализатор → Настройки…», ⌘,).
@@ -145,6 +182,30 @@ struct SettingsView: View {
                     if updater.phase == .available {
                         Button("Обновить") { Task { await updater.install() } }
                             .buttonStyle(.borderedProminent)
+                    }
+                }
+
+                if updater.phase == .downloading || updater.phase == .installing {
+                    VStack(alignment: .leading, spacing: 4) {
+                        if updater.totalBytes > 0 {
+                            ProgressView(value: updater.downloadProgress).progressViewStyle(.linear)
+                            HStack {
+                                Text(updater.phase == .downloading ? "Скачивание…" : "Установка…")
+                                Spacer()
+                                Text("\(Int((updater.downloadProgress * 100).rounded()))%")
+                                    .foregroundStyle(.secondary)
+                            }
+                            .font(.caption)
+                        } else {
+                            HStack(spacing: 6) {
+                                ProgressView().controlSize(.small)
+                                Text(updater.phase == .downloading ? "Скачивание…" : "Установка…")
+                                    .font(.caption)
+                            }
+                        }
+                        if let detail = updateDownloadDetail(updater) {
+                            Text(detail).font(.caption2).foregroundStyle(.secondary)
+                        }
                     }
                 }
 
