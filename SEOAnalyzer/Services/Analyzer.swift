@@ -73,6 +73,8 @@ final class Analyzer {
 
         let page = try await fetch(url: url)
         let doc = HTMLDocument(html: page.html)
+        let h1 = doc.headings(level: 1)
+        let words = doc.wordCount
 
         // Параллельно подтягиваем служебные ресурсы.
         async let robotsTextTask  = fetchText(at: "/robots.txt", base: page.finalURL)
@@ -91,9 +93,9 @@ final class Analyzer {
         let crawler = SiteCrawler(session: session, maxPages: crawlLimit)
         let scans = await crawler.crawl(start: page.finalURL, seeds: seeds)
 
-        let seo         = analyzeSEO(doc: doc, hasRobots: hasRobots, hasSitemap: hasSitemap)
+        let seo         = analyzeSEO(doc: doc, h1: h1, words: words, hasRobots: hasRobots, hasSitemap: hasSitemap)
         let aeo         = analyzeAEO(doc: doc, scans: scans)
-        let geo         = analyzeGEO(doc: doc, page: page, scans: scans, robots: robots, hasRobots: hasRobots, hasLLMs: hasLLMs)
+        let geo         = analyzeGEO(doc: doc, page: page, words: words, scans: scans, robots: robots, hasRobots: hasRobots, hasLLMs: hasLLMs)
         let crawl       = analyzeCrawl(scans: scans, hasSitemap: hasSitemap)
         let performance = analyzePerformance(doc: doc, page: page)
         let usability   = analyzeUsability(doc: doc, page: page)
@@ -112,8 +114,8 @@ final class Analyzer {
             overallScore: overall,
             pageTitle: doc.title,
             metaDescription: doc.metaDescription,
-            h1Texts: doc.headings(level: 1),
-            wordCount: doc.wordCount,
+            h1Texts: h1,
+            wordCount: words,
             pageSizeBytes: page.byteCount,
             responseTimeMs: page.responseTimeMs,
             serverHeader: page.headers["server"],
@@ -182,7 +184,7 @@ final class Analyzer {
 
     // MARK: - SEO
 
-    private func analyzeSEO(doc: HTMLDocument, hasRobots: Bool, hasSitemap: Bool) -> CategoryResult {
+    private func analyzeSEO(doc: HTMLDocument, h1: [String], words: Int, hasRobots: Bool, hasSitemap: Bool) -> CategoryResult {
         var checks: [CheckItem] = []
         var s = Scorer()
         func record(_ w: Double, _ item: CheckItem, credit: Double = 0.33) {
@@ -220,7 +222,6 @@ final class Analyzer {
         }
 
         // H1
-        let h1 = doc.headings(level: 1)
         if h1.count == 1 {
             record(10, CheckItem("Заголовок H1", status: .passed, detail: "Один H1: «\(h1[0])»"))
         } else if h1.count > 1 {
@@ -256,7 +257,6 @@ final class Analyzer {
         }
 
         // Объём контента (строго: < 300 слов — тонкий контент)
-        let words = doc.wordCount
         if words >= 600 {
             record(8, CheckItem("Объём контента", status: .passed, detail: "~\(words) слов."))
         } else if words >= 300 {
@@ -397,7 +397,7 @@ final class Analyzer {
 
     // MARK: - GEO (Generative Engine Optimization)
 
-    private func analyzeGEO(doc: HTMLDocument, page: FetchedPage, scans: [PageScan],
+    private func analyzeGEO(doc: HTMLDocument, page: FetchedPage, words: Int, scans: [PageScan],
                             robots: RobotsTxt, hasRobots: Bool, hasLLMs: Bool) -> CategoryResult {
         var checks: [CheckItem] = []
         var s = Scorer()
@@ -503,7 +503,6 @@ final class Analyzer {
                 recommendation: "Если бренд есть в Wikipedia/Wikidata — добавьте sameAs на них: ИИ точнее идентифицирует сущность."), credit: 0.3)
 
         // Глубина контента
-        let words = doc.wordCount
         if words >= 800 {
             record(10, CheckItem("Глубина материала", status: .passed, detail: "~\(words) слов."))
         } else if words >= 400 {

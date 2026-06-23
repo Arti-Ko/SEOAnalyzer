@@ -21,6 +21,7 @@ struct ContentView: View {
             }
         }
         .background(Color(nsColor: .windowBackgroundColor))
+        .background(WindowConfigurator())
         .sheet(isPresented: $updater.showSheet) {
             UpdatePromptView()
         }
@@ -58,14 +59,24 @@ struct ContentView: View {
             .softSurface(Capsule())
             .frame(maxWidth: 440)
 
-            Button(action: vm.runAnalysis) {
-                Text("Анализировать")
-                    .font(.system(size: 13, weight: .semibold))
-                    .padding(.horizontal, 6)
+            if vm.isAnalyzing {
+                Button(role: .destructive, action: vm.cancelAnalysis) {
+                    Text("Отменить")
+                        .font(.system(size: 13, weight: .semibold))
+                        .padding(.horizontal, 6)
+                }
+                .buttonStyle(.bordered)
+                .keyboardShortcut(.escape, modifiers: [])
+            } else {
+                Button(action: vm.runAnalysis) {
+                    Text("Анализировать")
+                        .font(.system(size: 13, weight: .semibold))
+                        .padding(.horizontal, 6)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(!vm.canAnalyze)
+                .keyboardShortcut(.return, modifiers: [])
             }
-            .buttonStyle(.borderedProminent)
-            .disabled(!vm.canAnalyze)
-            .keyboardShortcut(.return, modifiers: [])
 
             Button {
                 Task { await updater.check(silent: false) }
@@ -77,7 +88,8 @@ struct ContentView: View {
             .buttonStyle(.bordered)
         }
         .padding(.horizontal, 18)
-        .padding(.vertical, 12)
+        .padding(.top, 16)
+        .padding(.bottom, 12)
     }
 
     // MARK: - Состояния

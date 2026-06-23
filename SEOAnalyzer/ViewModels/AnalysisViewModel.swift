@@ -12,6 +12,7 @@ final class AnalysisViewModel: ObservableObject {
     @Published var errorMessage: String?
 
     private let analyzer = Analyzer()
+    private var currentTask: Task<Void, Never>?
 
     var canAnalyze: Bool {
         !urlInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isAnalyzing
@@ -24,16 +25,29 @@ final class AnalysisViewModel: ObservableObject {
         report = nil
 
         let limit = max(1, UserDefaults.standard.object(forKey: "crawlLimit") as? Int ?? 50)
-        Task {
+        currentTask = Task {
             do {
                 let result = try await analyzer.analyze(urlString: input, crawlLimit: limit)
                 self.report = result
             } catch {
-                self.errorMessage = (error as? LocalizedError)?.errorDescription
-                    ?? error.localizedDescription
+                // Отмену пользователем не показываем как ошибку.
+                if !Task.isCancelled {
+                    self.errorMessage = (error as? LocalizedError)?.errorDescription
+                        ?? error.localizedDescription
+                }
             }
             self.isAnalyzing = false
+            self.currentTask = nil
         }
+    }
+
+    /// Прерывает текущий анализ. Дочерние сетевые запросы (URLSession, TaskGroup
+    /// в SiteCrawler) отменяются автоматически — отмена структурированно
+    /// распространяется на все вложенные задачи.
+    func cancelAnalysis() {
+        currentTask?.cancel()
+        currentTask = nil
+        isAnalyzing = false
     }
 
     // MARK: - Экспорт

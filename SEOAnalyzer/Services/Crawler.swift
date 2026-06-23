@@ -51,6 +51,11 @@ final class SiteCrawler: @unchecked Sendable {
     }
 
     /// Обходит сайт начиная со стартового URL, используя ссылки из sitemap как засев.
+    ///
+    /// Воркеры подаются в группу непрерывно: как только один скан завершается,
+    /// слот сразу занимает следующий URL из очереди. Старая реализация ждала,
+    /// пока вся пачка из `concurrency` догрузится, прежде чем начать следующую —
+    /// одна медленная страница в пачке простаивала остальных воркеров впустую.
     func crawl(start: URL, seeds: [URL]) async -> [PageScan] {
         guard let baseHost = Self.baseHost(start) else { return [] }
 
@@ -70,32 +75,43 @@ final class SiteCrawler: @unchecked Sendable {
 
         var results: [PageScan] = []
 
-        while !queue.isEmpty && results.count < maxPages {
-            // Берём пачку для параллельной загрузки.
-            var batch: [URL] = []
-            while batch.count < concurrency && !queue.isEmpty {
-                let url = queue.removeFirst()
-                let key = Self.normalize(url)
-                if visited.contains(key) { continue }
-                visited.insert(key)
-                batch.append(url)
-            }
-            if batch.isEmpty { continue }
+        // Координирующее замыкание withTaskGroup выполняется последовательно —
+        // мутировать queue/visited/enqueued/results здесь безопасно, конкурентны
+        // только сами задачи, добавленные через group.addTask.
+        await withTaskGroup(of: PageScan?.self) { group in
+            var inFlight = 0
 
-            let scans = await withTaskGroup(of: PageScan?.self) { group -> [PageScan] in
-                for url in batch { group.addTask { await self.scan(url) } }
-                var out: [PageScan] = []
-                for await s in group where s != nil { out.append(s!) }
-                return out
-            }
-
-            for s in scans {
-                results.append(s)
-                guard results.count < maxPages else { break }
-                // Засеваем новыми внутренними ссылками (с запасом для очереди).
-                if enqueued.count < maxPages * 5 {
-                    for link in s.internalLinks { enqueue(link) }
+            func nextQueued() -> URL? {
+                while !queue.isEmpty {
+                    let url = queue.removeFirst()
+                    let key = Self.normalize(url)
+                    if visited.contains(key) { continue }
+                    visited.insert(key)
+                    return url
                 }
+                return nil
+            }
+
+            func fillSlots() {
+                while inFlight < concurrency,
+                      results.count + inFlight < maxPages,
+                      let url = nextQueued() {
+                    group.addTask { await self.scan(url) }
+                    inFlight += 1
+                }
+            }
+
+            fillSlots()
+            while inFlight > 0, let scan = await group.next() {
+                inFlight -= 1
+                if let scan {
+                    results.append(scan)
+                    // Засеваем новыми внутренними ссылками (с запасом для очереди).
+                    if enqueued.count < maxPages * 5 {
+                        for link in scan.internalLinks { enqueue(link) }
+                    }
+                }
+                if results.count < maxPages { fillSlots() }
             }
         }
 

@@ -8,9 +8,18 @@ struct HTMLDocument {
     let raw: String
     private let lowercased: String
 
+    /// Содержимое блоков JSON-LD (структурированные данные Schema.org).
+    /// Вычисляется один раз в `init` — без кэша каждый вызов `hasSchemaType`
+    /// (а их в `pageSignals()` около десятка) заново гонял regex по всему HTML.
+    let jsonLDBlocks: [String]
+    let jsonLDText: String
+
     init(html: String) {
         self.raw = html
         self.lowercased = html.lowercased()
+        let blocks = Self.extractJSONLDBlocks(from: html)
+        self.jsonLDBlocks = blocks
+        self.jsonLDText = blocks.joined(separator: " ").lowercased()
     }
 
     // MARK: - Базовые помощники
@@ -212,18 +221,22 @@ struct HTMLDocument {
 
 extension HTMLDocument {
 
-    /// Содержимое блоков JSON-LD (структурированные данные Schema.org).
-    var jsonLDBlocks: [String] {
-        matches("<script[^>]*type=[\"']application/ld\\+json[\"'][^>]*>(.*?)</script>")
-            .compactMap { group($0, 1)?.trimmed }
-            .filter { !$0.isEmpty }
+    fileprivate static func extractJSONLDBlocks(from html: String) -> [String] {
+        guard let regex = try? NSRegularExpression(
+            pattern: "<script[^>]*type=[\"']application/ld\\+json[\"'][^>]*>(.*?)</script>",
+            options: [.caseInsensitive, .dotMatchesLineSeparators]
+        ) else { return [] }
+        let range = NSRange(html.startIndex..., in: html)
+        return regex.matches(in: html, options: [], range: range).compactMap { m -> String? in
+            guard let r = Range(m.range(at: 1), in: html) else { return nil }
+            let s = String(html[r]).trimmed
+            return s.isEmpty ? nil : s
+        }
     }
 
     var hasJSONLD: Bool { !jsonLDBlocks.isEmpty }
     var hasMicrodata: Bool { lowercased.contains("itemtype=") }
     var hasStructuredData: Bool { hasJSONLD || hasMicrodata }
-
-    private var jsonLDText: String { jsonLDBlocks.joined(separator: " ").lowercased() }
 
     /// Есть ли в разметке указанный тип Schema.org (JSON-LD или микроразметка).
     func hasSchemaType(_ type: String) -> Bool {

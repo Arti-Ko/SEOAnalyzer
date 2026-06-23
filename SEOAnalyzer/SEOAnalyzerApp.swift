@@ -8,7 +8,7 @@ struct SEOAnalyzerApp: App {
                 .frame(minWidth: 900, minHeight: 640)
         }
         .windowStyle(.titleBar)
-        .windowToolbarStyle(.unified)
+        .windowToolbarStyle(.unified(showsTitle: false))
         .commands {
             CommandGroup(replacing: .newItem) { }
             CommandGroup(after: .appInfo) {
