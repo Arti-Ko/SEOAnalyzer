@@ -100,11 +100,14 @@ final class UpdateService: ObservableObject {
 
     func install() async {
         guard let release = latest else { return }
-        guard let asset = release.assets.first(where: { $0.name.lowercased().hasSuffix(".zip") }),
-              let url = URL(string: asset.browserDownloadURL) else {
-            fail("В релизе нет zip-архива приложения для установки.", silent: false); return
+        // Предпочитаем DMG-установщик, при его отсутствии — zip-архив.
+        let asset = release.assets.first(where: { $0.name.lowercased().hasSuffix(".dmg") })
+            ?? release.assets.first(where: { $0.name.lowercased().hasSuffix(".zip") })
+        guard let asset, let url = URL(string: asset.browserDownloadURL) else {
+            fail("В релизе нет установщика (.dmg или .zip).", silent: false); return
         }
 
+        let isDMG = asset.name.lowercased().hasSuffix(".dmg")
         phase = .downloading
         downloadProgress = 0.1
         let fm = FileManager.default
@@ -117,18 +120,24 @@ final class UpdateService: ObservableObject {
                 .appendingPathComponent("SEOAnalyzerUpdate-\(UUID().uuidString)")
             try fm.createDirectory(at: workDir, withIntermediateDirectories: true)
 
-            let zipPath = workDir.appendingPathComponent("update.zip")
-            try fm.moveItem(at: tempFile, to: zipPath)
+            let downloaded = workDir.appendingPathComponent(isDMG ? "update.dmg" : "update.zip")
+            try fm.moveItem(at: tempFile, to: downloaded)
 
             phase = .installing
             downloadProgress = 0.8
 
-            let extractDir = workDir.appendingPathComponent("extracted")
-            try fm.createDirectory(at: extractDir, withIntermediateDirectories: true)
-            try runProcess("/usr/bin/ditto", ["-x", "-k", zipPath.path, extractDir.path])
+            let newApp: URL?
+            if isDMG {
+                newApp = try extractAppFromDMG(downloaded, workDir: workDir)
+            } else {
+                let extractDir = workDir.appendingPathComponent("extracted")
+                try fm.createDirectory(at: extractDir, withIntermediateDirectories: true)
+                try runProcess("/usr/bin/ditto", ["-x", "-k", downloaded.path, extractDir.path])
+                newApp = findApp(in: extractDir)
+            }
 
-            guard let newApp = findApp(in: extractDir) else {
-                fail("В архиве обновления не найдено приложение (.app).", silent: false); return
+            guard let newApp else {
+                fail("В установщике не найдено приложение (.app).", silent: false); return
             }
 
             downloadProgress = 1.0
@@ -137,6 +146,29 @@ final class UpdateService: ObservableObject {
         } catch {
             fail("Ошибка установки обновления: \(error.localizedDescription)", silent: false)
         }
+    }
+
+    /// Монтирует DMG, копирует из него .app во временную папку и размонтирует образ.
+    private func extractAppFromDMG(_ dmgPath: URL, workDir: URL) throws -> URL {
+        let fm = FileManager.default
+        let mountPoint = workDir.appendingPathComponent("mnt")
+        try fm.createDirectory(at: mountPoint, withIntermediateDirectories: true)
+
+        try runProcess("/usr/bin/hdiutil",
+                       ["attach", dmgPath.path, "-nobrowse", "-noautoopen",
+                        "-mountpoint", mountPoint.path])
+        defer {
+            _ = try? runProcess("/usr/bin/hdiutil", ["detach", mountPoint.path, "-force"])
+        }
+
+        guard let app = findApp(in: mountPoint) else {
+            throw NSError(domain: "UpdateService", code: -10,
+                          userInfo: [NSLocalizedDescriptionKey: "В образе DMG не найдено приложение."])
+        }
+        // Копируем приложение из тома наружу, прежде чем размонтировать.
+        let dest = workDir.appendingPathComponent(app.lastPathComponent)
+        try runProcess("/usr/bin/ditto", [app.path, dest.path])
+        return dest
     }
 
     func openReleasePage() {

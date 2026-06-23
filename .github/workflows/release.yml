@@ -39,12 +39,15 @@ jobs:
         id: ver
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "tag=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+            TAG="${{ github.event.inputs.version }}"
           else
-            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+            TAG="${GITHUB_REF_NAME}"
           fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          # Числовая версия без префикса v — попадёт в CFBundleShortVersionString.
+          echo "ver=${TAG#v}" >> "$GITHUB_OUTPUT"
 
-      - name: Сборка (Release, без подписи)
+      - name: Сборка (Release, ad-hoc подпись)
         run: |
           set -o pipefail
           xcodebuild \
@@ -52,24 +55,43 @@ jobs:
             -scheme SEOAnalyzer \
             -configuration Release \
             -derivedDataPath build \
+            MARKETING_VERSION="${{ steps.ver.outputs.ver }}" \
+            CURRENT_PROJECT_VERSION="${{ github.run_number }}" \
             CODE_SIGN_IDENTITY="-" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
             ENABLE_HARDENED_RUNTIME=NO \
             clean build
 
-      - name: Упаковка .app в zip
+      - name: Сборка DMG-установщика
         run: |
+          set -e
           APP_PATH="build/Build/Products/Release/SEOAnalyzer.app"
           if [ ! -d "$APP_PATH" ]; then
             echo "Не найдено собранное приложение по пути $APP_PATH"
             find build -name "*.app" -maxdepth 5 || true
             exit 1
           fi
-          # Ad-hoc подпись, чтобы приложение запускалось без предупреждений о повреждении.
-          codesign --force --deep --sign - "$APP_PATH" || true
-          ditto -c -k --keepParent "$APP_PATH" "SEOAnalyzer.zip"
-          ls -lh SEOAnalyzer.zip
+
+          # Ad-hoc подпись бандла (обязательна для запуска на Apple Silicon).
+          codesign --force --deep --sign - "$APP_PATH"
+          codesign --verify --deep --strict "$APP_PATH" && echo "Подпись валидна"
+
+          # Готовим содержимое DMG: само приложение + ярлык на «Программы».
+          STAGING="dmg_staging"
+          rm -rf "$STAGING"; mkdir -p "$STAGING"
+          cp -R "$APP_PATH" "$STAGING/"
+          ln -s /Applications "$STAGING/Applications"
+
+          hdiutil create \
+            -volname "SEO-Анализатор" \
+            -srcfolder "$STAGING" \
+            -fs HFS+ \
+            -format UDZO \
+            -ov \
+            "SEOAnalyzer.dmg"
+          hdiutil verify "SEOAnalyzer.dmg" || true
+          ls -lh SEOAnalyzer.dmg
 
       - name: Публикация релиза
         uses: softprops/action-gh-release@v2
@@ -77,12 +99,23 @@ jobs:
           tag_name: ${{ steps.ver.outputs.tag }}
           name: SEO-Анализатор ${{ steps.ver.outputs.tag }}
           generate_release_notes: true
-          files: SEOAnalyzer.zip
+          files: SEOAnalyzer.dmg
           body: |
-            Автоматическая сборка SEO-Анализатора.
+            ## SEO-Анализатор ${{ steps.ver.outputs.tag }}
 
-            Установка: скачайте `SEOAnalyzer.zip`, распакуйте и переместите
-            `SEOAnalyzer.app` в папку «Программы». При первом запуске —
-            правый клик → «Открыть» (приложение не подписано сертификатом разработчика).
+            ### Установка
+            1. Скачайте **`SEOAnalyzer.dmg`** ниже и откройте его.
+            2. Перетащите **SEO-Анализатор** в папку **«Программы»**.
 
-            Встроенный механизм обновлений найдёт этот релиз автоматически.
+            ### Если macOS пишет «программа повреждена»
+            Приложение не нотаризовано в Apple (нет платного Developer-аккаунта),
+            поэтому Gatekeeper помечает скачанные файлы «карантином». Снимите его
+            одной командой в Терминале — после этого приложение откроется нормально:
+
+            ```
+            xattr -cr /Applications/SEOAnalyzer.app
+            ```
+
+            Либо: правый клик по приложению → **Открыть** → **Открыть**.
+
+            Встроенный механизм обновлений найдёт следующие релизы автоматически.
